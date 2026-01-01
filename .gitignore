@@ -1,0 +1,13 @@
+# python
+venv/
+__pycache__/
+*.pyc
+
+# nnU-Net (IMPORTANT)
+HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_results/
+HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_preprocessed/
+HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_raw/
+
+# model weights
+*.pth
+*.pt
