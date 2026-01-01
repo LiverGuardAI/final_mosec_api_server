@@ -4,6 +4,7 @@ import tempfile
 import shutil
 import logging
 from typing import List, Dict
+import zipfile
 import torch
 import requests
 import SimpleITK as sitk
@@ -101,6 +102,7 @@ class DICOMSegmentationWorker(Worker):
         for idx, item in enumerate(data):
             import time
             start_time = time.time()
+            dicom_dir = None
 
             try:
                 series_id = item.get('series_id')
@@ -179,9 +181,6 @@ class DICOMSegmentationWorker(Worker):
                 logger.info("="*70)
                 sys.stdout.flush()
 
-                # Cleanup
-                shutil.rmtree(dicom_dir, ignore_errors=True)
-
                 results.append({
                     "status": "success",
                     "original_series_id": series_id,
@@ -201,6 +200,9 @@ class DICOMSegmentationWorker(Worker):
                     "error": str(e),
                     "series_id": item.get('series_id', 'unknown')
                 })
+            finally:
+                if dicom_dir and os.path.exists(dicom_dir):
+                    shutil.rmtree(dicom_dir, ignore_errors=True)
         
         return results
     
@@ -208,27 +210,33 @@ class DICOMSegmentationWorker(Worker):
         """Download DICOM series from Orthanc"""
         output_dir = os.path.join(self.temp_dir, f"dicom_input_{idx}")
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Get series instances
-        response = requests.get(f'{ORTHANC_BASE_URL}/series/{series_id}/instances', timeout=30)
-        response.raise_for_status()
-        instances = response.json()
-        
-        # Download each instance
-        for instance in instances:
-            instance_id = instance['ID']
-            dicom_response = requests.get(
-                f'{ORTHANC_BASE_URL}/instances/{instance_id}/file',
-                timeout=30
-            )
-            dicom_response.raise_for_status()
-            
-            # Save DICOM file
-            instance_number = instance.get('MainDicomTags', {}).get('InstanceNumber', '0')
-            output_path = os.path.join(output_dir, f"instance_{instance_number.zfill(4)}.dcm")
-            with open(output_path, 'wb') as f:
-                f.write(dicom_response.content)
-        
+
+        archive_url = f'{ORTHANC_BASE_URL}/series/{series_id}/archive'
+        archive_path = os.path.join(output_dir, f"{series_id}.zip")
+        try:
+            with requests.get(archive_url, stream=True, timeout=60) as response:
+                response.raise_for_status()
+                with open(archive_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+        except Exception as exc:
+            raise Exception(f"Failed to download series archive: {series_id}") from exc
+
+        try:
+            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                zip_ref.extractall(output_dir)
+        except Exception as exc:
+            raise Exception(f"Failed to extract series archive: {series_id}") from exc
+        finally:
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
+
+        # Find actual DICOM root in case the archive has nested folders.
+        for root, _dirs, files in os.walk(output_dir):
+            if any(name.lower().endswith('.dcm') for name in files):
+                return root
+
         return output_dir
     
     def dicom_to_nifti(self, dicom_dir: str, idx: int) -> str:
@@ -398,7 +406,6 @@ class DICOMSegmentationWorker(Worker):
     def upload_to_orthanc(self, dicom_dir: str) -> str:
         """Upload DICOM files to Orthanc and return series ID"""
         series_id = None
-        uploaded_count = 0
 
         # Check if directory exists and has files
         if not os.path.exists(dicom_dir):
@@ -411,47 +418,60 @@ class DICOMSegmentationWorker(Worker):
         if len(dicom_files) == 0:
             raise Exception(f"No DICOM files found in directory: {dicom_dir}")
 
-        # Upload each DICOM file
-        for filename in sorted(dicom_files):
-            filepath = os.path.join(dicom_dir, filename)
-            logger.info(f"Uploading {filename} to Orthanc...")
+        archive_path = os.path.join(dicom_dir, "mask_upload.zip")
+        try:
+            with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
+                for filename in sorted(dicom_files):
+                    filepath = os.path.join(dicom_dir, filename)
+                    zipf.write(filepath, arcname=filename)
+
+            logger.info(f"Uploading {len(dicom_files)} DICOM files as ZIP to Orthanc...")
             sys.stdout.flush()
 
-            with open(filepath, 'rb') as f:
-                dicom_content = f.read()
-
-            response = requests.post(
-                f'{ORTHANC_BASE_URL}/instances',
-                data=dicom_content,
-                headers={'Content-Type': 'application/dicom'},
-                timeout=30
-            )
+            with open(archive_path, 'rb') as f:
+                response = requests.post(
+                    f'{ORTHANC_BASE_URL}/instances',
+                    data=f,
+                    headers={'Content-Type': 'application/zip'},
+                    timeout=60
+                )
             response.raise_for_status()
-            uploaded_count += 1
 
-            # Get series ID from first upload
-            if series_id is None:
-                result = response.json()
+            result = response.json()
+            instance_id = None
+            if isinstance(result, dict):
                 instance_id = result.get('ID')
-                logger.info(f"First instance uploaded with ID: {instance_id}")
-                sys.stdout.flush()
+                series_id = result.get('ParentSeries') or series_id
+            elif isinstance(result, list) and result:
+                first = result[0]
+                if isinstance(first, dict):
+                    instance_id = first.get('ID')
+                    series_id = first.get('ParentSeries') or series_id
+                else:
+                    instance_id = first
 
-                if not instance_id:
-                    raise Exception("Failed to get instance ID from Orthanc upload response")
+            logger.info(f"First instance uploaded with ID: {instance_id}")
+            sys.stdout.flush()
 
-                # Get series ID from instance
+            if not instance_id:
+                raise Exception("Failed to get instance ID from Orthanc ZIP upload response")
+
+            if not series_id:
                 instance_info = requests.get(
                     f'{ORTHANC_BASE_URL}/instances/{instance_id}',
                     timeout=10
                 ).json()
                 series_id = instance_info.get('ParentSeries')
-                logger.info(f"Got series ID: {series_id}")
-                sys.stdout.flush()
+            logger.info(f"Got series ID: {series_id}")
+            sys.stdout.flush()
 
-                if not series_id:
-                    raise Exception(f"Failed to get ParentSeries from instance {instance_id}")
+            if not series_id:
+                raise Exception(f"Failed to get ParentSeries from instance {instance_id}")
+        finally:
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
 
-        logger.info(f"Successfully uploaded {uploaded_count} files to Orthanc with series ID: {series_id}")
+        logger.info(f"Successfully uploaded {len(dicom_files)} files to Orthanc with series ID: {series_id}")
         sys.stdout.flush()
         return series_id
     
