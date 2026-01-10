@@ -261,7 +261,7 @@ class DICOMSegmentationWorker(Worker):
         os.makedirs(output_dir, exist_ok=True)
 
         # Get the path to the standalone inference script
-        script_path = os.path.join(os.path.dirname(__file__), 'run_nnunet_inference.py')
+        script_path = os.path.join(os.path.dirname(__file__), 'run_nnunet_inference_fp16.py')
 
         # Prepare arguments for subprocess
         folds_str = ','.join(map(str, self.folds))

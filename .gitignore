@@ -1,7 +1,39 @@
+# env
+.env
+.env.*
+.env.local
+.env.prod
+.secrets/
+secrets/
+*.secret
+*.secrets
+
 # python
+.venv/
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+pip-wheel-metadata/
+
+# packaging
+build/
+dist/
+*.egg-info/
+
+# logs
+*.log
+
+# editor
+.DS_Store
+.idea/
+.vscode/
 
 # nnU-Net (IMPORTANT)
 HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_results/
@@ -11,3 +43,33 @@ HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_raw/
 # model weights
 *.pth
 *.pt
+*.onnx
+*.trt
+*.engine
+*.plan
+*.deb
+
+# credentials & keys
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.cer
+id_rsa
+id_rsa.pub
+
+# data exports/dumps
+*.db
+*.sqlite3
+*.sql
+*.dump
+*.bak
+*.backup
+*.tar
+*.tar.gz
+*.zip
+
+# local runtime
+logs/
+tmp/
