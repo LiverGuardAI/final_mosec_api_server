@@ -11,6 +11,10 @@ import requests
 import SimpleITK as sitk
 import numpy as np
 from mosec import Server, Worker
+from dotenv import load_dotenv
+
+# Load local environment variables if present.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env.local"))
 
 # Configure logging to stdout
 logging.basicConfig(
@@ -22,10 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # Orthanc 서버 설정
-ORTHANC_BASE_URL = os.getenv('ORTHANC_URL', 'http://34.67.62.238/orthanc')
-
+ORTHANC_BASE_URL = os.getenv('ORTHANC_URL', '')
 
 class DICOMSegmentationWorker(Worker):
     """
@@ -335,7 +337,7 @@ class DICOMSegmentationWorker(Worker):
         archive_url = f'{ORTHANC_BASE_URL}/series/{series_id}/archive'
         archive_path = os.path.join(output_dir, f"{series_id}.zip")
         try:
-            with requests.get(archive_url, stream=True, timeout=60) as response:
+            with requests.get(archive_url, auth=(os.environ.get("ORTHANC_USER_NAME"), os.environ.get("ORTHANC_PASSWORD")), stream=True, timeout=60) as response:
                 response.raise_for_status()
                 with open(archive_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -512,7 +514,7 @@ class DICOMSegmentationWorker(Worker):
             ds.PixelRepresentation = 0
             
             # Convert mask slice to uint16
-            mask_slice = mask_array[i].astype(np.uint16) * 1000  # Scale for visibility
+            mask_slice = mask_array[i].astype(np.uint16)  # Scale for visibility
             ds.PixelData = mask_slice.tobytes()
             
             # Save DICOM file
@@ -558,6 +560,7 @@ class DICOMSegmentationWorker(Worker):
                     f'{ORTHANC_BASE_URL}/instances',
                     data=f,
                     headers={'Content-Type': 'application/zip'},
+                    auth=(os.environ.get("ORTHANC_USER_NAME"), os.environ.get("ORTHANC_PASSWORD")),
                     timeout=60
                 )
             response.raise_for_status()
@@ -584,6 +587,7 @@ class DICOMSegmentationWorker(Worker):
             if not series_id:
                 instance_info = requests.get(
                     f'{ORTHANC_BASE_URL}/instances/{instance_id}',
+                    auth=(os.environ.get("ORTHANC_USER_NAME"), os.environ.get("ORTHANC_PASSWORD")),
                     timeout=10
                 ).json()
                 series_id = instance_info.get('ParentSeries')

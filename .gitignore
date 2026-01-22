@@ -44,6 +44,7 @@ HCC-TACE-Seg-nnU-Net-LiTS/nnUNet_raw/
 *.pth
 *.pt
 *.onnx
+*.onnx.data
 *.trt
 *.engine
 *.plan

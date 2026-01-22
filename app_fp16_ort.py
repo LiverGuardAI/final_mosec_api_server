@@ -10,6 +10,10 @@ import requests
 import SimpleITK as sitk
 import numpy as np
 from mosec import Server, Worker
+from dotenv import load_dotenv
+
+# Load local environment variables if present.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env.local"))
 
 # Configure logging to stdout
 logging.basicConfig(
@@ -23,8 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Orthanc 서버 설정
-ORTHANC_BASE_URL = os.getenv('ORTHANC_URL', 'http://34.67.62.238/orthanc')
-
+ORTHANC_BASE_URL = os.getenv('ORTHANC_URL', '')
 
 class DICOMSegmentationWorker(Worker):
     """
