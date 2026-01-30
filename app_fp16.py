@@ -330,9 +330,7 @@ class DICOMSegmentationWorker(Worker):
         logger.info(f"Loading mask from: {mask_nifti_path}")
         mask_image = sitk.ReadImage(mask_nifti_path)
         mask_array = sitk.GetArrayFromImage(mask_image)
-        # Reverse slice order to match DICOM orientation
-        mask_array = mask_array[::-1]
-        logger.info(f"Mask shape: {mask_array.shape} (reversed)")
+        logger.info(f"Mask shape: {mask_array.shape}")
         sys.stdout.flush()
 
         # Get reference DICOM files
@@ -353,8 +351,20 @@ class DICOMSegmentationWorker(Worker):
         logger.info(f"Generated mask series UID: {mask_series_uid}")
         sys.stdout.flush()
 
-        # Create DICOM files for each slice
-        for i, ref_dicom_path in enumerate(dicom_names):
+        # Build reference mapping (InstanceNumber order)
+        ref_items = []
+        for idx, ref_dicom_path in enumerate(dicom_names):
+            try:
+                ref_ds = pydicom.dcmread(ref_dicom_path, stop_before_pixels=True)
+                inst_num = int(ref_ds.get('InstanceNumber', idx + 1))
+            except Exception:
+                inst_num = idx + 1
+            ref_items.append((inst_num, idx, ref_dicom_path))
+
+        ref_items.sort(key=lambda item: item[0])
+
+        # Create DICOM files for each slice (InstanceNumber aligned)
+        for order_index, (inst_num, src_index, ref_dicom_path) in enumerate(ref_items):
             ref_ds = pydicom.dcmread(ref_dicom_path)
 
             # Create new dataset based on reference
@@ -376,7 +386,7 @@ class DICOMSegmentationWorker(Worker):
             ds.Modality = 'SEG'
             ds.SeriesDescription = 'AI Segmentation Mask'
             ds.SeriesNumber = str(int(ref_ds.get('SeriesNumber', '1')) + 1000)
-            ds.InstanceNumber = str(i + 1)
+            ds.InstanceNumber = str(inst_num)
             
             # Copy image metadata
             ds.Rows = ref_ds.Rows
@@ -395,11 +405,16 @@ class DICOMSegmentationWorker(Worker):
             ds.PixelRepresentation = 0
             
             # Convert mask slice to uint16
-            mask_slice = mask_array[i].astype(np.uint16) * 1000  # Scale for visibility
+            if src_index >= mask_array.shape[0]:
+                raise Exception(
+                    f"Mask slice index out of range: {src_index} (mask depth {mask_array.shape[0]})"
+                )
+            mask_slice = mask_array[src_index].astype(np.uint16) * 1000  # Scale for visibility
             ds.PixelData = mask_slice.tobytes()
             
             # Save DICOM file
-            output_path = os.path.join(output_dir, f"mask_{str(i+1).zfill(4)}.dcm")
+            output_index = inst_num if inst_num is not None else (order_index + 1)
+            output_path = os.path.join(output_dir, f"mask_{str(output_index).zfill(4)}.dcm")
             ds.save_as(output_path, write_like_original=False)
 
         logger.info(f"Created {len(dicom_names)} DICOM mask files in {output_dir}")
